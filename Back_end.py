@@ -39,37 +39,24 @@ def get_connection(DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT):
         return None
 
 def insert_product_to_db(product: Product):
-    conn=None
-    try:
-        conn = psycopg2.connect(
-            database=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            port=DB_PORT,
-            host=DB_HOST
-        )
-        cursor = conn.cursor()
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS products (
-            product_id SERIAL PRIMARY KEY,
-            product_name VARCHAR(100),
-            product_description VARCHAR(500),
-            product_price DOUBLE PRECISION,
-            product_stock INT
-        );
-        """)
+    conn=get_connection(DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT)
+    cursor = conn.cursor()
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS products (
+        product_id SERIAL PRIMARY KEY,
+        product_name VARCHAR(100),
+        product_description VARCHAR(500),
+        product_price DOUBLE PRECISION,
+        product_stock INT
+    );
+    """)
 
-        cursor.execute("""
-        INSERT INTO products (product_name, product_description, product_price, product_stock)
-        VALUES (%s, %s, %s, %s);
-        """, (product.product_name, product.product_description, product.product_price, product.product_stock))
-        conn.commit()
-        cursor.close()
-    except psycopg2.Error as e:
-        print("Database error:",e)
-    finally:
-        if conn:
-            conn.close()
+    cursor.execute("""
+    INSERT INTO products (product_name, product_description, product_price, product_stock)
+    VALUES (%s, %s, %s, %s);
+    """, (product.product_name, product.product_description, product.product_price, product.product_stock))
+    conn.commit()
+    cursor.close()
 
 def fetch_products_from_db():
     conn = get_connection(DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT)
@@ -89,19 +76,21 @@ def fetch_products_from_db():
         for r in rows
     ]
 
-
-# def update_product_in_db(product: Product):
-#     conn = None
-#     try:
-#         conn = psycopg2.connect(
-#             database=DB_NAME,
-#             user=DB_USER,
-#             password=DB_PASSWORD,
-#             port=DB_PORT,
-#             host=DB_HOST
-#         )
-#         cursor = conn.cursor()
-#         cursor.execute("""
+def update_product_in_db(product_id,product: Product):
+    conn = get_connection(DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT)
+    cursor = conn.cursor()
+    cursor.execute("""
+                   UPDATE products
+                   SET product_name        = %s,
+                       product_description = %s,
+                       product_price       = %s,
+                       product_stock       = %s
+                   WHERE product_id = %s;
+                   """,
+                   (product.product_name, product.product_description, product.product_price, product.product_stock,
+                    product_id))
+    conn.commit()
+    cursor.close()
 
 
 #............APIS........................
@@ -115,4 +104,7 @@ def get_all_products():
     products = fetch_products_from_db()
     return products
 
-
+@app.put("/update_product/{product_id}")
+def update_product(product_id,product: Product):
+    update_product_in_db(product_id,product)
+    return {"message": "Product updated successfully"}

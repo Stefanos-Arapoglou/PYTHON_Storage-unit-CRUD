@@ -45,7 +45,33 @@ def fetch_products():
         messagebox.showerror("Error", f"API Error: {e}")
         return []
 
+def update_product(product_id,name,description,price,stock,window,refresh_callback=None):
+    product_name=name.get()
+    product_description=description.get()
+    product_price=price.get()
+    product_stock=stock.get()
 
+    if not product_name or not product_description or not product_price or not product_stock:
+        messagebox.showerror("Input Error","Please fill all necessary fields.")
+        return
+
+    try:
+        product_data={
+            "product_name": product_name,
+            "product_description": product_description,
+            "product_price": float(product_price),
+            "product_stock": int(product_stock),
+        }
+        response = requests.put(f"{API_URL}/update_product/{product_id}/", json=product_data)
+        if response.status_code == 200:
+            messagebox.showinfo("Success", "Product updated successfully")
+            window.destroy()
+            if refresh_callback:
+                refresh_callback()
+        else:
+            messagebox.showerror("Error", f"API Error: {response.text}")
+    except Exception as e:
+        messagebox.showerror("Error", f"API Error: {e}")
 
 
 #............... FRONT END VISUALIZATION........................
@@ -79,7 +105,6 @@ def open_create_product():
                                            product_price_entry, product_stock_entry),window.destroy()]).pack(side="left", padx=10)
     ttk.Button(button_frame, text="Back",
                command=window.destroy).pack(side="left", padx=10)
-
 
 def open_view_products():
     window = tk.Toplevel(root)
@@ -177,8 +202,115 @@ def open_view_products():
             product.get('product_stock', 'N/A')
         ),tags=tags)
 
+    def refresh_tables():
+        """Refresh both tables with updated data"""
+        # Clear existing data
+        for tree in [available_tree, out_of_stock_tree]:
+            for item in tree.get_children():
+                tree.delete(item)
+
+        # Fetch updated products
+        products = fetch_products()
+        if not products:
+            return
+
+        # Separate products
+        available_products = [p for p in products if p.get('product_stock', 0) > 0]
+        out_of_stock_products = [p for p in products if p.get('product_stock', 0) <= 0]
+
+        # Populate tables with updated data
+        for product in available_products:
+            stock_value = product.get('product_stock', 0)  # FIXED: Define stock_value here
+            tags = ('negative',) if stock_value < 0 else ()
+
+            available_tree.insert("", "end", values=(
+                product.get('product_id', 'N/A'),
+                product.get('product_name', 'N/A'),
+                product.get('product_description', 'N/A'),
+                product.get('product_price', 'N/A'),
+                stock_value
+            ), tags=tags)
+
+        for product in out_of_stock_products:
+            stock_value = product.get('product_stock', 0)  # FIXED: Define stock_value here
+            tags = ('negative',) if stock_value < 0 else ()
+
+            out_of_stock_tree.insert("", "end", values=(
+                product.get('product_id', 'N/A'),
+                product.get('product_name', 'N/A'),
+                product.get('product_description', 'N/A'),
+                product.get('product_price', 'N/A'),
+                stock_value
+            ), tags=tags)
+
+    # Add double-click bindings
+    available_tree.bind("<Double-1>", lambda e: on_double_click(e, available_tree, refresh_tables))
+    out_of_stock_tree.bind("<Double-1>", lambda e: on_double_click(e, out_of_stock_tree, refresh_tables))
+
         # Back button
     ttk.Button(window, text="Back", command=window.destroy).pack(pady=10)
+
+
+def open_edit_product(product_data,refresh_callback=None):
+    window = tk.Toplevel(root)
+    window.title("Edit Product")
+    window.geometry("400x400")
+
+    ttk.Label(window, text="Edit Product", font=("Arial", 14, "bold")).pack(pady=10)
+
+    ttk.Label(window, text="Product ID:").pack()
+    product_id_label = ttk.Label(window, text=product_data['product_id'])
+    product_id_label.pack()
+
+    ttk.Label(window, text="Product Name:").pack()
+    product_name_entry = ttk.Entry(window, width=30)
+    product_name_entry.insert(0, product_data['product_name'])
+    product_name_entry.pack()
+
+    ttk.Label(window, text="Product Description:").pack()
+    product_description_entry = ttk.Entry(window, width=30)
+    product_description_entry.insert(0, product_data['product_description'])
+    product_description_entry.pack()
+
+    ttk.Label(window, text="Product Price:").pack()
+    product_price_entry = ttk.Entry(window, width=30)
+    product_price_entry.insert(0, str(product_data['product_price']))
+    product_price_entry.pack()
+
+    ttk.Label(window, text="Stock:").pack()
+    product_stock_entry = ttk.Entry(window, width=30)
+    product_stock_entry.insert(0, str(product_data['product_stock']))
+    product_stock_entry.pack()
+
+    button_frame = ttk.Frame(window)
+    button_frame.pack(pady=10)
+
+    ttk.Button(button_frame, text="Update Product",
+               command=lambda: update_product(
+                   product_data['product_id'],
+                   product_name_entry,
+                   product_description_entry,
+                   product_price_entry,
+                   product_stock_entry,
+                   window,
+                   refresh_callback
+               )).pack(side="left", padx=10)
+    ttk.Button(button_frame, text="Cancel",
+               command=window.destroy).pack(side="left", padx=10)
+
+def on_double_click(event, tree, refresh_callback=None):
+    """Handle double-click on treeview item"""
+    item = tree.selection()[0] if tree.selection() else None
+    if item:
+        values = tree.item(item, 'values')
+        product_data = {
+            'product_id': values[0],
+            'product_name': values[1],
+            'product_description': values[2],
+            'product_price': float(values[3]),
+            'product_stock': int(values[4])
+        }
+        open_edit_product(product_data, refresh_callback)
 
 
 #...........MAIN MENU........................
