@@ -5,6 +5,50 @@ import requests
 API_URL = "http://127.0.0.1:8000"
 
 
+#.................CLASSES AND HELPER SCRIPTS......................
+class EditableTreeview(ttk.Treeview):
+    def __init__(self, master=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self.bind("<Double-1>", self._on_double_click)
+        self._edit_box = None
+
+    def _on_double_click(self, event):
+        region = self.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+
+        row_id = self.identify_row(event.y)
+        column = self.identify_column(event.x)
+        col_index = int(column.replace('#', '')) - 1
+
+        # Only allow editing the Stock column
+        if self["columns"][col_index].lower() != "stock":
+            return
+
+        x, y, width, height = self.bbox(row_id, column)
+        value = self.item(row_id, "values")[col_index]
+
+        self._edit_box = tk.Entry(self)
+        self._edit_box.place(x=x, y=y, width=width, height=height)
+        self._edit_box.insert(0, value)
+        self._edit_box.focus()
+        self._edit_box.bind("<Return>", lambda e: self._save_edit(row_id, col_index))
+        self._edit_box.bind("<FocusOut>", lambda e: self._cancel_edit())
+
+    def _save_edit(self, row_id, col_index):
+        new_value = self._edit_box.get()
+        values = list(self.item(row_id, "values"))
+        values[col_index] = new_value
+        self.item(row_id, values=values)
+        self._edit_box.destroy()
+        self._edit_box = None
+
+    def _cancel_edit(self):
+        if self._edit_box:
+            self._edit_box.destroy()
+            self._edit_box = None
+
+
 #.................FUNCTIONS TO RUN APIS............................
 
 def create_product(name,description,price,stock):
@@ -114,6 +158,56 @@ def find_products_by_field(field,search_term):
         messagebox.showerror("Error", f"API Error: {e}")
         return []
 
+def restock_products(restocked_products, window=None, refresh_callback=None):
+    for product in restocked_products:
+        # Extract product data from dict
+        product_id = product.get("product_id")
+        product_name = product.get("product_name")
+        product_description = product.get("product_description")
+        product_price = product.get("product_price")
+        product_stock = product.get("product_stock")
+
+        # Validation
+        if not all([product_name, product_description, product_price, product_stock]):
+            messagebox.showerror("Input Error", "Please fill all necessary fields.")
+            return
+
+        try:
+            product_data = {
+                "product_name": product_name,
+                "product_description": product_description,
+                "product_price": float(product_price),
+                "product_stock": int(product_stock),
+            }
+
+            response = requests.put(f"{API_URL}/update_product/{product_id}/", json=product_data)
+
+            if response.status_code == 200:
+                print(f"✅ Product {product_name} updated successfully.")
+            else:
+                messagebox.showerror("Error", f"API Error ({response.status_code}): {response.text}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"API Error: {e}")
+
+    # Optional cleanup after all updates
+    messagebox.showinfo("Success", "All products updated successfully.")
+    if window:
+        window.destroy()
+    if refresh_callback:
+        refresh_callback()
+
+def get_stats():
+    try:
+        response = requests.get(f"{API_URL}/get_stats/")
+        if response.status_code == 200:
+            return response.json()
+        else:
+            messagebox.showerror("Error", f"Failed to fetch products: {response.text}")
+            return []
+    except Exception as e:
+        messagebox.showerror("Error", f"API Error: {e}")
+        return []
 
 
 #............... FRONT END VISUALIZATION........................
@@ -565,11 +659,160 @@ def open_search_window():
     # Set focus to first search field
     all_search_entry.focus()
 
+def open_restock_window():
+    window = tk.Toplevel(root)
+    window.title("Restock Products")
+    window.geometry("600x600")
+
+    products = fetch_products()
+    if not products:
+        messagebox.showerror("Error", "No products found")
+        return []
+
+    main_frame = ttk.Frame(window)
+    main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+    products_frame = ttk.Frame(main_frame)
+    products_frame.pack()
+    ttk.Label(products_frame, text="Available products", font=("Arial", 13, "bold")).pack(pady=10)
+
+    products_tree = EditableTreeview(products_frame, columns=("ID", "Name", "Description", "Price", "Stock"),
+                                     show="headings", height=20)
+    products_tree.heading("ID", text="ID", anchor="center")
+    products_tree.heading("Name", text="Product Name", anchor="center")
+    products_tree.heading("Description", text="Description", anchor="center")
+    products_tree.heading("Price", text="Price", anchor="center")
+    products_tree.heading("Stock", text="Stock", anchor="center")
+    products_tree.column("ID", width=40, anchor="center")
+    products_tree.column("Name", width=140, anchor="center")
+    products_tree.column("Description", width=200, anchor="center")
+    products_tree.column("Price", width=100, anchor="center")
+    products_tree.column("Stock", width=80, anchor="center")
+
+    products_tree_scrollbar = ttk.Scrollbar(products_frame, orient="vertical", command=products_tree.yview)
+    products_tree.configure(yscrollcommand=products_tree_scrollbar.set)
+
+    products_tree.pack(fill="both", expand=True)
+    products_tree.pack(side="right", fill="y")
+
+    # Define tag for negative stock (red color)
+    products_tree.tag_configure('negative', foreground='red')
+
+    for product in products:
+        stock_value = product.get('product_stock', 0)  # FIXED: Define stock_value here
+        tags = ('negative',) if stock_value < 0 else ()
+
+        products_tree.insert("", "end", values=(
+            product.get('product_id', 'N/A'),
+            product.get('product_name', 'N/A'),
+            product.get('product_description', 'N/A'),
+            product.get('product_price', 'N/A'),
+            stock_value
+        ), tags=tags)
+
+    def on_restock():
+        updated_products = []
+        for item_id in products_tree.get_children():
+            values = products_tree.item(item_id, "values")
+            updated_products.append({
+                "product_id": values[0],
+                "product_name": values[1],
+                "product_description": values[2],
+                "product_price": values[3],
+                "product_stock": values[4],
+            })
+        restock_products(updated_products, window)
+
+    button_frame = ttk.Frame(window)
+    button_frame.pack(pady=10)
+
+    # FIX: Use lambda to prevent immediate execution
+    ttk.Button(button_frame, text="Restock Products",
+               command=lambda: [on_restock(),window.destroy()]).pack(side="left", padx=10)
+    ttk.Button(button_frame, text="Back",
+               command=window.destroy).pack(side="left", padx=10)
+
+def open_stats_window():
+    window = tk.Toplevel(root)
+    window.title("Statistics Overview")
+    window.geometry("400x500")
+    window.resizable(False, False)
+
+    ttk.Label(window, text="📊 Product Statistics", font=("Arial", 16, "bold")).pack(pady=15)
+
+    stats = get_stats()
+    if not stats:
+        ttk.Label(window, text="No statistics available", font=("Arial", 12)).pack(pady=20)
+        return
+
+    # Fetch all products to resolve product_id → product_name
+    products = fetch_products()
+    product_map = {str(p["product_id"]): p for p in products}
+
+    # Build readable labels
+    stat_labels = {
+        "product_count": "Total Products",
+        "average_price": "Average Price",
+        "average_stock": "Average Stock",
+        "highest_price_id": "Product with Highest Price",
+        "highest_price": "Highest Price",
+        "highest_stock_id": "Product with Highest Stock",
+        "highest_stock": "Highest Stock",
+        "value_sum": "Total Inventory Value",
+        "available_products": "Available Products",
+        "out_of_stock_products": "Out of Stock Products",
+    }
+
+    # Frame for all stat rows
+    stats_frame = ttk.Frame(window)
+    stats_frame.pack(padx=20, pady=10, fill="x")
+
+    product_links = {}  # Keep references for clickable product labels
+
+    for i, (key, label_text) in enumerate(stat_labels.items()):
+        ttk.Label(stats_frame, text=label_text + ":", font=("Arial", 11, "bold")).grid(row=i, column=0, sticky="w", pady=5)
+
+        value = stats.get(key, "N/A")
+
+        # Handle product ID fields
+        if key in ("highest_price_id", "highest_stock_id"):
+            product = product_map.get(str(value))
+            if product:
+                product_name = product["product_name"]
+                label = tk.Label(stats_frame, text=f"{product_name} (ID: {value})",
+                                 font=("Arial", 11), foreground="blue", cursor="hand2")
+                label.grid(row=i, column=1, sticky="w", pady=5)
+                # Store and bind double-click
+                product_links[label] = product
+                label.bind("<Double-1>", lambda e, p=product: open_edit_product(p))
+            else:
+                ttk.Label(stats_frame, text=f"Unknown (ID: {value})", font=("Arial", 11)).grid(row=i, column=1, sticky="w", pady=5)
+
+        else:
+            # Format numeric values nicely
+            if isinstance(value, (int, float)):
+                # Round all numeric values
+                value = round(float(value), 2)
+
+                # Add euro sign to price-related stats
+                if key in ("average_price", "highest_price", "value_sum"):
+                    display_value = f"{value:.2f} €"
+                else:
+                    display_value = str(value)
+            else:
+                display_value = str(value)
+
+            ttk.Label(stats_frame, text=display_value, font=("Arial", 11)).grid(row=i, column=1, sticky="w", pady=5)
+
+    ttk.Button(window, text="Close", command=window.destroy).pack(pady=20)
+
+
+
 #...........MAIN MENU........................
 
 root = tk.Tk()
-root.geometry("400x400")
-root.title("CRUDE STORAGE APP")
+root.geometry("400x480")
+root.title("CRUD STORAGE APP")
 root.resizable(False, False)
 
 style = ttk.Style()
@@ -580,7 +823,9 @@ ttk.Label(root, text="Storage CRUDE App", font=("Arial", 18, "bold")).pack(pady=
 ttk.Button(root, text="Create Product", width=25, command=open_create_product).pack(pady=5)
 ttk.Button(root, text="View Products", width=25, command=open_view_products).pack(pady=5)
 ttk.Button(root, text="Search Products", width=25, command=open_search_window).pack(pady=5)
+ttk.Button(root, text="Restock Products", width=25, command=open_restock_window).pack(pady=5)
+ttk.Button(root, text="View Statistics", width=25, command=open_stats_window).pack(pady=5)
 
-ttk.Button(root, text="Exit", width=25, command=root.destroy).pack(pady=20)
+ttk.Button(root, text="Exit", width=25, command=root.destroy).pack(pady=50)
 
 root.mainloop()
