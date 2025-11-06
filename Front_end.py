@@ -790,9 +790,19 @@ def open_stats_window():
 
         else:
             # Format numeric values nicely
-            if isinstance(value, float):
-                value = round(value, 2)
-            ttk.Label(stats_frame, text=value, font=("Arial", 11)).grid(row=i, column=1, sticky="w", pady=5)
+            if isinstance(value, (int, float)):
+                # Round all numeric values
+                value = round(float(value), 2)
+
+                # Add euro sign to price-related stats
+                if key in ("average_price", "highest_price", "value_sum"):
+                    display_value = f"{value:.2f} €"
+                else:
+                    display_value = str(value)
+            else:
+                display_value = str(value)
+
+            ttk.Label(stats_frame, text=display_value, font=("Arial", 11)).grid(row=i, column=1, sticky="w", pady=5)
 
     ttk.Button(window, text="Close", command=window.destroy).pack(pady=20)
 
